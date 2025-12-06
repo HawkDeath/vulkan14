@@ -2,6 +2,8 @@
 #include <exception>
 #include <format>
 #include <iostream>
+#include <optional>
+#include <set>
 #include <stdexcept>
 #include <vector>
 #include <vulkan/vulkan.h>
@@ -25,14 +27,19 @@ struct WindowContext {
   uint32_t height = 1080u;
 };
 
-struct VulkanContext {
-  VkInstance instance;
-  VkPhysicalDevice physicalDevice;
-  VkDevice device;
-  VkSurfaceKHR surface;
+struct Queue {
+  std::optional<uint32_t> idx;
+  VkQueue queueHandle = VK_NULL_HANDLE;
+};
 
-  VkQueue graphicsQueue;
-  VkQueue presentQueue;
+struct VulkanContext {
+  VkInstance instance = VK_NULL_HANDLE;
+  VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+  VkDevice device = VK_NULL_HANDLE;
+  VkSurfaceKHR surface = VK_NULL_HANDLE;
+
+  Queue graphicsQueue = {};
+  Queue presentQueue = {};
 
   VkPhysicalDeviceProperties properties;
 };
@@ -107,7 +114,88 @@ void initVulkan(AppContext &appCtx) {
     VkPhysicalDeviceProperties properties;
     vkGetPhysicalDeviceProperties(dev, &properties);
     std::cout << std::format("Device {}", properties.deviceName) << "\n";
+    if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+      appCtx.vkCtx.physicalDevice = dev;
+      appCtx.vkCtx.properties = properties;
+      break;
+    }
   }
+
+  if (appCtx.vkCtx.physicalDevice == VK_NULL_HANDLE)
+    RT_THROW("Failed to choose Vulkan supported GPU");
+
+  std::cout << std::format("Choosen {} GPU", appCtx.vkCtx.properties.deviceName)
+            << "\n";
+
+  uint32_t queueFamilyCount = 0u;
+  vkGetPhysicalDeviceQueueFamilyProperties(appCtx.vkCtx.physicalDevice,
+                                           &queueFamilyCount, nullptr);
+  std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+  vkGetPhysicalDeviceQueueFamilyProperties(
+      appCtx.vkCtx.physicalDevice, &queueFamilyCount, queueFamilies.data());
+
+  uint32_t i = 0;
+
+  for (const auto &queueFam : queueFamilies) {
+    if (queueFam.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+      appCtx.vkCtx.graphicsQueue.idx = i;
+    }
+
+    VkBool32 presentSupported = VK_FALSE;
+    vkGetPhysicalDeviceSurfaceSupportKHR(appCtx.vkCtx.physicalDevice, i,
+                                         appCtx.vkCtx.surface,
+                                         &presentSupported);
+
+    if (presentSupported) {
+      appCtx.vkCtx.presentQueue.idx = i;
+    }
+
+    if (appCtx.vkCtx.presentQueue.idx.has_value() &&
+        appCtx.vkCtx.graphicsQueue.idx.has_value()) {
+      break;
+    }
+    ++i;
+  }
+
+  std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+  std::set<uint32_t> uniqueQueueFamilies = {
+      appCtx.vkCtx.graphicsQueue.idx.value(),
+      appCtx.vkCtx.presentQueue.idx.value()};
+
+  float prio = 1.0f;
+  for (uint32_t qFam : uniqueQueueFamilies) {
+    VkDeviceQueueCreateInfo queueInfo = {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+        .pNext = VK_NULL_HANDLE,
+        .flags = 0u,
+        .queueFamilyIndex = qFam,
+        .queueCount = 1u,
+        .pQueuePriorities = &prio};
+    queueCreateInfos.push_back(queueInfo);
+  }
+
+  VkPhysicalDeviceFeatures reqDeviceFeatures{};
+
+  VkDeviceCreateInfo devInfo = {
+      .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+      .pNext = VK_NULL_HANDLE, // TODO add feature13, feature1
+      .flags = 0u,
+      .queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size()),
+      .pQueueCreateInfos = queueCreateInfos.data(),
+      .enabledLayerCount = 0u,
+      .ppEnabledLayerNames = VK_NULL_HANDLE,
+      .enabledExtensionCount = 0u, // TODO add device extensions
+      .ppEnabledExtensionNames = VK_NULL_HANDLE,
+      .pEnabledFeatures = &reqDeviceFeatures};
+
+  VK_CHECK(vkCreateDevice(appCtx.vkCtx.physicalDevice, &devInfo, nullptr,
+                          &appCtx.vkCtx.device),
+           "Failed to create logical device");
+
+  vkGetDeviceQueue(appCtx.vkCtx.device, appCtx.vkCtx.graphicsQueue.idx.value(),
+                   0u, &appCtx.vkCtx.graphicsQueue.queueHandle);
+  vkGetDeviceQueue(appCtx.vkCtx.device, appCtx.vkCtx.presentQueue.idx.value(),
+                   0u, &appCtx.vkCtx.presentQueue.queueHandle);
 }
 
 int main() {
