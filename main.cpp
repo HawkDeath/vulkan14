@@ -42,6 +42,8 @@ struct VulkanContext {
   Queue presentQueue = {};
 
   VkPhysicalDeviceProperties properties;
+  VkPhysicalDeviceVulkan13Features vulkan13Features;
+  VkPhysicalDeviceVulkan14Features vulkan14Features;
 };
 
 struct AppContext {
@@ -106,6 +108,7 @@ void initVulkan(AppContext &appCtx) {
   vkEnumeratePhysicalDevices(appCtx.vkCtx.instance, &deviceCount, nullptr);
   if (deviceCount == 0)
     RT_THROW("Failed to find Vulkan supported GPU");
+
   std::vector<VkPhysicalDevice> devices(deviceCount);
   vkEnumeratePhysicalDevices(appCtx.vkCtx.instance, &deviceCount,
                              devices.data());
@@ -114,6 +117,11 @@ void initVulkan(AppContext &appCtx) {
     VkPhysicalDeviceProperties properties;
     vkGetPhysicalDeviceProperties(dev, &properties);
     std::cout << std::format("Device {}", properties.deviceName) << "\n";
+  }
+
+  for (auto &dev : devices) {
+    VkPhysicalDeviceProperties properties;
+    vkGetPhysicalDeviceProperties(dev, &properties);
     if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
       appCtx.vkCtx.physicalDevice = dev;
       appCtx.vkCtx.properties = properties;
@@ -160,7 +168,9 @@ void initVulkan(AppContext &appCtx) {
   std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
   std::set<uint32_t> uniqueQueueFamilies = {
       appCtx.vkCtx.graphicsQueue.idx.value(),
-      appCtx.vkCtx.presentQueue.idx.value()};
+      appCtx.vkCtx.presentQueue.idx.value()
+
+  };
 
   float prio = 1.0f;
   for (uint32_t qFam : uniqueQueueFamilies) {
@@ -174,11 +184,25 @@ void initVulkan(AppContext &appCtx) {
     queueCreateInfos.push_back(queueInfo);
   }
 
-  VkPhysicalDeviceFeatures reqDeviceFeatures{};
+  appCtx.vkCtx.vulkan13Features.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+  appCtx.vkCtx.vulkan13Features.pNext = VK_NULL_HANDLE;
+  appCtx.vkCtx.vulkan13Features.dynamicRendering = VK_TRUE;
+  appCtx.vkCtx.vulkan13Features.synchronization2 = VK_TRUE;
+  appCtx.vkCtx.vulkan14Features.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES;
+  appCtx.vkCtx.vulkan14Features.pNext = &appCtx.vkCtx.vulkan13Features;
+
+  VkPhysicalDeviceFeatures enabledFeatures;
+
+  VkPhysicalDeviceFeatures2 reqDeviceFeatures{};
+  reqDeviceFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+  reqDeviceFeatures.features = enabledFeatures;
+  reqDeviceFeatures.pNext = &appCtx.vkCtx.vulkan14Features;
 
   VkDeviceCreateInfo devInfo = {
       .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-      .pNext = VK_NULL_HANDLE, // TODO add feature13, feature1
+      .pNext = &reqDeviceFeatures,
       .flags = 0u,
       .queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size()),
       .pQueueCreateInfos = queueCreateInfos.data(),
@@ -186,7 +210,7 @@ void initVulkan(AppContext &appCtx) {
       .ppEnabledLayerNames = VK_NULL_HANDLE,
       .enabledExtensionCount = 0u, // TODO add device extensions
       .ppEnabledExtensionNames = VK_NULL_HANDLE,
-      .pEnabledFeatures = &reqDeviceFeatures};
+      .pEnabledFeatures = VK_NULL_HANDLE};
 
   VK_CHECK(vkCreateDevice(appCtx.vkCtx.physicalDevice, &devInfo, nullptr,
                           &appCtx.vkCtx.device),
@@ -200,10 +224,11 @@ void initVulkan(AppContext &appCtx) {
 
 int main() {
 
-  AppContext appCtx;
+  AppContext appCtx{};
   try {
     initWindow(appCtx);
     initVulkan(appCtx);
+
   } catch (std::exception &e) {
     std::cerr << e.what();
     return -3;
