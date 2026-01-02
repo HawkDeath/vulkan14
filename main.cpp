@@ -32,18 +32,35 @@ struct Queue {
   VkQueue queueHandle = VK_NULL_HANDLE;
 };
 
+struct SwapChain {
+  VkSwapchainKHR swapchainHandle = VK_NULL_HANDLE;
+  VkSwapchainKHR oldSwapchainHandle = VK_NULL_HANDLE;
+  VkFormat colorFormat{};
+  VkColorSpaceKHR colorSpace{};
+  VkExtent2D extent{};
+  VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+
+  std::vector<VkImage> images{};
+  std::vector<VkImageView> imageViews{};
+
+  static constexpr int32_t MAX_SWAPCHAIN_FRAMES = {2};
+  uint32_t currentFrame = {0u};
+};
+
 struct VulkanContext {
   VkInstance instance = VK_NULL_HANDLE;
   VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
   VkDevice device = VK_NULL_HANDLE;
   VkSurfaceKHR surface = VK_NULL_HANDLE;
+  SwapChain swapchain{};
 
   Queue graphicsQueue = {};
   Queue presentQueue = {};
+  Queue computeQueue = {};
 
   VkPhysicalDeviceProperties properties;
-  VkPhysicalDeviceVulkan13Features vulkan13Features;
-  VkPhysicalDeviceVulkan14Features vulkan14Features;
+  VkPhysicalDeviceVulkan13Features vulkan13Features{};
+  VkPhysicalDeviceVulkan14Features vulkan14Features{};
 };
 
 struct AppContext {
@@ -149,6 +166,10 @@ void initVulkan(AppContext &appCtx) {
       appCtx.vkCtx.graphicsQueue.idx = i;
     }
 
+    if (queueFam.queueFlags & VK_QUEUE_COMPUTE_BIT) {
+      appCtx.vkCtx.computeQueue.idx = i;
+    }
+
     VkBool32 presentSupported = VK_FALSE;
     vkGetPhysicalDeviceSurfaceSupportKHR(appCtx.vkCtx.physicalDevice, i,
                                          appCtx.vkCtx.surface,
@@ -183,7 +204,9 @@ void initVulkan(AppContext &appCtx) {
         .pQueuePriorities = &prio};
     queueCreateInfos.push_back(queueInfo);
   }
-
+  const std::vector<const char *> deviceExtensions = {
+      VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+  // prepare Vulkan1.4 features
   appCtx.vkCtx.vulkan13Features.sType =
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
   appCtx.vkCtx.vulkan13Features.pNext = VK_NULL_HANDLE;
@@ -193,7 +216,7 @@ void initVulkan(AppContext &appCtx) {
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES;
   appCtx.vkCtx.vulkan14Features.pNext = &appCtx.vkCtx.vulkan13Features;
 
-  VkPhysicalDeviceFeatures enabledFeatures;
+  VkPhysicalDeviceFeatures enabledFeatures{};
 
   VkPhysicalDeviceFeatures2 reqDeviceFeatures{};
   reqDeviceFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
@@ -208,9 +231,11 @@ void initVulkan(AppContext &appCtx) {
       .pQueueCreateInfos = queueCreateInfos.data(),
       .enabledLayerCount = 0u,
       .ppEnabledLayerNames = VK_NULL_HANDLE,
-      .enabledExtensionCount = 0u, // TODO add device extensions
-      .ppEnabledExtensionNames = VK_NULL_HANDLE,
-      .pEnabledFeatures = VK_NULL_HANDLE};
+      .enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size()),
+      .ppEnabledExtensionNames = deviceExtensions.data(),
+      .pEnabledFeatures = VK_NULL_HANDLE
+
+  };
 
   VK_CHECK(vkCreateDevice(appCtx.vkCtx.physicalDevice, &devInfo, nullptr,
                           &appCtx.vkCtx.device),
@@ -220,6 +245,80 @@ void initVulkan(AppContext &appCtx) {
                    0u, &appCtx.vkCtx.graphicsQueue.queueHandle);
   vkGetDeviceQueue(appCtx.vkCtx.device, appCtx.vkCtx.presentQueue.idx.value(),
                    0u, &appCtx.vkCtx.presentQueue.queueHandle);
+  vkGetDeviceQueue(appCtx.vkCtx.device, appCtx.vkCtx.computeQueue.idx.value(),
+                   0u, &appCtx.vkCtx.computeQueue.queueHandle);
+
+  // Create Swapchain
+  // pick formats for swapchain
+
+  uint32_t formatCount = 0u;
+  vkGetPhysicalDeviceSurfaceFormatsKHR(
+      appCtx.vkCtx.physicalDevice, appCtx.vkCtx.surface, &formatCount, nullptr);
+  if (formatCount == 0u)
+    RT_THROW("Not found ANY surface color format!!!!");
+
+  std::vector<VkSurfaceFormatKHR> surfaceFormats(formatCount);
+  vkGetPhysicalDeviceSurfaceFormatsKHR(appCtx.vkCtx.physicalDevice,
+                                       appCtx.vkCtx.surface, &formatCount,
+                                       surfaceFormats.data());
+
+  VkSurfaceFormatKHR selectedFormat =
+      surfaceFormats[0]; // get first available format as default
+  std::vector<VkFormat> preferredFormats = {VK_FORMAT_B8G8R8A8_UNORM,
+                                            VK_FORMAT_R8G8B8A8_UNORM,
+                                            VK_FORMAT_A8B8G8R8_UNORM_PACK32
+
+  };
+
+  for (auto &availFormat : surfaceFormats) {
+    if (std::find(preferredFormats.begin(), preferredFormats.end(),
+                  availFormat.format) != preferredFormats.end()) {
+      selectedFormat = availFormat;
+      break;
+    }
+  }
+
+  appCtx.vkCtx.swapchain.colorFormat = selectedFormat.format;
+  appCtx.vkCtx.swapchain.colorSpace = selectedFormat.colorSpace;
+
+  auto &swapchain = appCtx.vkCtx.swapchain;
+
+  swapchain.oldSwapchainHandle = swapchain.swapchainHandle;
+
+  VkSurfaceCapabilitiesKHR surfaceCapabilities;
+  vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+      appCtx.vkCtx.physicalDevice, appCtx.vkCtx.surface, &surfaceCapabilities);
+
+  if (surfaceCapabilities.currentExtent.width == uint32_t(-1)) {
+    swapchain.extent.width = appCtx.windowCtx.width;
+    swapchain.extent.height = appCtx.windowCtx.height;
+  } else {
+    swapchain.extent = surfaceCapabilities.currentExtent;
+    appCtx.windowCtx.width = swapchain.extent.width;
+    appCtx.windowCtx.height = swapchain.extent.height;
+  }
+
+  uint32_t presentModeCount = 0u;
+  vkGetPhysicalDeviceSurfacePresentModesKHR(appCtx.vkCtx.physicalDevice,
+                                            appCtx.vkCtx.surface,
+                                            &presentModeCount, nullptr);
+  if (presentModeCount == 0u)
+    RT_THROW("Not found ANY present mode");
+
+  std::vector<VkPresentModeKHR> presentModes(presentModeCount);
+  vkGetPhysicalDeviceSurfacePresentModesKHR(
+      appCtx.vkCtx.physicalDevice, appCtx.vkCtx.surface, &presentModeCount,
+      presentModes.data());
+
+  // find preferred mailbox format
+
+  appCtx.vkCtx.swapchain.presentMode =
+      *std::find_if(presentModes.begin(), presentModes.end(),
+                    [](const VkPresentModeKHR &mode) {
+                      return mode == VK_PRESENT_MODE_MAILBOX_KHR;
+                    });
+
+  std::cout << appCtx.vkCtx.swapchain.presentMode << "\n";
 }
 
 int main() {
