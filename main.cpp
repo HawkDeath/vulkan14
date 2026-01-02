@@ -311,14 +311,100 @@ void initVulkan(AppContext &appCtx) {
       presentModes.data());
 
   // find preferred mailbox format
-
   appCtx.vkCtx.swapchain.presentMode =
       *std::find_if(presentModes.begin(), presentModes.end(),
                     [](const VkPresentModeKHR &mode) {
                       return mode == VK_PRESENT_MODE_MAILBOX_KHR;
                     });
 
-  std::cout << appCtx.vkCtx.swapchain.presentMode << "\n";
+  uint32_t numberSwapchainImages = surfaceCapabilities.minImageCount + 1u;
+  if ((surfaceCapabilities.maxImageCount > 0) &&
+      (numberSwapchainImages > surfaceCapabilities.maxImageCount)) {
+    numberSwapchainImages = surfaceCapabilities.maxImageCount;
+  }
+
+  VkSurfaceTransformFlagsKHR perTransform =
+      surfaceCapabilities.currentTransform;
+  if (surfaceCapabilities.supportedTransforms &
+      VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) {
+    perTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+  }
+
+  VkCompositeAlphaFlagBitsKHR compositeAlpha =
+      VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+
+  std::vector<VkCompositeAlphaFlagBitsKHR> compositeAlphaFlags = {
+      VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+      VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+      VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
+      VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR
+
+  };
+
+  for (auto &caf : compositeAlphaFlags) {
+    if (surfaceCapabilities.supportedCompositeAlpha & caf) {
+      compositeAlpha = caf;
+      break;
+    }
+  }
+
+  VkSwapchainCreateInfoKHR swapchainCreateInfo = {
+      .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+      .pNext = VK_NULL_HANDLE,
+      .flags = 0u,
+      .surface = appCtx.vkCtx.surface,
+      .minImageCount = numberSwapchainImages,
+      .imageFormat = appCtx.vkCtx.swapchain.colorFormat,
+      .imageColorSpace = appCtx.vkCtx.swapchain.colorSpace,
+      .imageExtent = appCtx.vkCtx.swapchain.extent,
+      .imageArrayLayers = 1u,
+      .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+      .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+      .queueFamilyIndexCount = 0u,
+      .pQueueFamilyIndices = VK_NULL_HANDLE,
+      .preTransform = static_cast<VkSurfaceTransformFlagBitsKHR>(perTransform),
+      .compositeAlpha = compositeAlpha,
+      .presentMode = appCtx.vkCtx.swapchain.presentMode,
+      .clipped = VK_TRUE,
+      .oldSwapchain = appCtx.vkCtx.swapchain.oldSwapchainHandle
+
+  };
+
+  VK_CHECK(vkCreateSwapchainKHR(appCtx.vkCtx.device, &swapchainCreateInfo,
+                                nullptr,
+                                &appCtx.vkCtx.swapchain.swapchainHandle),
+           "Failed to create swapchain");
+
+  vkGetSwapchainImagesKHR(appCtx.vkCtx.device,
+                          appCtx.vkCtx.swapchain.swapchainHandle,
+                          &numberSwapchainImages, nullptr);
+  appCtx.vkCtx.swapchain.images.resize(numberSwapchainImages);
+  appCtx.vkCtx.swapchain.imageViews.resize(numberSwapchainImages);
+  vkGetSwapchainImagesKHR(
+      appCtx.vkCtx.device, appCtx.vkCtx.swapchain.swapchainHandle,
+      &numberSwapchainImages, appCtx.vkCtx.swapchain.images.data());
+
+  for (size_t i = 0; i < numberSwapchainImages; ++i) {
+    VkImageViewCreateInfo ivCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = VK_NULL_HANDLE,
+        .flags = 0u,
+        .image = appCtx.vkCtx.swapchain.images[i],
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = appCtx.vkCtx.swapchain.colorFormat,
+        .components = {VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G,
+                       VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A},
+        .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                             .baseMipLevel = 0u,
+                             .levelCount = 1u,
+                             .baseArrayLayer = 0u,
+                             .layerCount = 1u}
+
+    };
+    VK_CHECK(vkCreateImageView(appCtx.vkCtx.device, &ivCreateInfo, nullptr,
+                               &appCtx.vkCtx.swapchain.imageViews[i]),
+             "Failed to create image view - swapchain");
+  }
 }
 
 int main() {
