@@ -1,3 +1,4 @@
+#include <array>
 #include <cstdint>
 #include <exception>
 #include <format>
@@ -61,6 +62,13 @@ struct VulkanContext {
   VkPhysicalDeviceProperties properties;
   VkPhysicalDeviceVulkan13Features vulkan13Features{};
   VkPhysicalDeviceVulkan14Features vulkan14Features{};
+
+  std::vector<VkSemaphore> presentSemaphores{};
+  std::vector<VkSemaphore> renderCompleteSemaphores{};
+  std::vector<VkFence> waitFences{};
+
+  VkCommandPool commandPool;
+  std::array<VkCommandBuffer, SwapChain::MAX_SWAPCHAIN_FRAMES> commandBuffers{};
 };
 
 struct AppContext {
@@ -405,6 +413,58 @@ void initVulkan(AppContext &appCtx) {
                                &appCtx.vkCtx.swapchain.imageViews[i]),
              "Failed to create image view - swapchain");
   }
+
+  // create sync objects
+  appCtx.vkCtx.waitFences.resize(appCtx.vkCtx.swapchain.MAX_SWAPCHAIN_FRAMES);
+  appCtx.vkCtx.presentSemaphores.resize(
+      appCtx.vkCtx.swapchain.MAX_SWAPCHAIN_FRAMES);
+  appCtx.vkCtx.renderCompleteSemaphores.resize(
+      appCtx.vkCtx.swapchain.images.size());
+
+  for (size_t i = 0; i < appCtx.vkCtx.swapchain.MAX_SWAPCHAIN_FRAMES; ++i) {
+    VkFenceCreateInfo fenceCI = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+                                 .pNext = VK_NULL_HANDLE,
+                                 .flags = VK_FENCE_CREATE_SIGNALED_BIT
+
+    };
+
+    VK_CHECK(vkCreateFence(appCtx.vkCtx.device, &fenceCI, nullptr,
+                           &appCtx.vkCtx.waitFences[i]),
+             "Failed to create wait fence");
+  }
+
+  for (size_t i = 0; i < appCtx.vkCtx.swapchain.MAX_SWAPCHAIN_FRAMES; ++i) {
+    VkSemaphoreCreateInfo semaphoreCI = {
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+        .pNext = VK_NULL_HANDLE,
+        .flags = 0u
+
+    };
+    VK_CHECK(vkCreateSemaphore(appCtx.vkCtx.device, &semaphoreCI, nullptr,
+                               &appCtx.vkCtx.presentSemaphores[i]),
+             "Failed to create present semaphore");
+  }
+
+  for (size_t i = 0; i < appCtx.vkCtx.swapchain.images.size(); ++i) {
+    VkSemaphoreCreateInfo semaphoreCI = {
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+        .pNext = VK_NULL_HANDLE,
+        .flags = 0u};
+    VK_CHECK(vkCreateSemaphore(appCtx.vkCtx.device, &semaphoreCI, nullptr,
+                               &appCtx.vkCtx.renderCompleteSemaphores[i]),
+             "Failed to create render semaphore");
+  }
+
+  // create command buffers
+  VkCommandPoolCreateInfo cmdPoolInfo = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+      .pNext = VK_NULL_HANDLE,
+      .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+      .queueFamilyIndex = appCtx.vkCtx.graphicsQueue.idx.value()};
+
+  VK_CHECK(vkCreateCommandPool(appCtx.vkCtx.device, &cmdPoolInfo, nullptr,
+                               &appCtx.vkCtx.commandPool),
+           "Failed to create command pool");
 }
 
 int main() {
