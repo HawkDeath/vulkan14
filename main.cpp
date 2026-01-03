@@ -509,6 +509,73 @@ void draw(AppContext &appCtx) {
   };
 
   vkBeginCommandBuffer(cmd, &cmdBegInfo);
+  // image barrier
+  VkImageMemoryBarrier imgBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+  imgBarrier.srcAccessMask = 0u;
+  imgBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  imgBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  imgBarrier.newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
+  imgBarrier.image = appCtx.vkCtx.swapchain.images[imageIdx];
+  imgBarrier.subresourceRange =
+      VkImageSubresourceRange{VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u};
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0u, 0u,
+                       nullptr, 0u, nullptr, 1u, &imgBarrier);
+
+  // rendering here
+  VkRenderingAttachmentInfo colorAttachInfo = {
+      .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+      .pNext = VK_NULL_HANDLE,
+      .imageView = appCtx.vkCtx.swapchain.imageViews[imageIdx],
+      .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+      .resolveMode = VK_RESOLVE_MODE_NONE,
+      .resolveImageView = VK_NULL_HANDLE,
+      .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+      .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+      .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      .clearValue = {.color = {1.125f, 0.125f, 0.125f, 1.0f}}
+
+  };
+
+  // TODO: add depth buffer
+
+  VkRenderingInfo renderingInfo = {
+      .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+      .pNext = VK_NULL_HANDLE,
+      .flags = 0u,
+      .renderArea = {0, 0, appCtx.vkCtx.swapchain.extent.width,
+                     appCtx.vkCtx.swapchain.extent.height},
+      .layerCount = 1u,
+      .viewMask = 0u,
+      .colorAttachmentCount = 1u,
+      .pColorAttachments = &colorAttachInfo,
+      .pDepthAttachment = VK_NULL_HANDLE,
+      .pStencilAttachment = VK_NULL_HANDLE
+
+  };
+
+  vkCmdBeginRendering(cmd, &renderingInfo);
+
+  VkViewport viewport{0.0f,
+                      0.0f,
+                      (float)appCtx.vkCtx.swapchain.extent.width,
+                      (float)appCtx.vkCtx.swapchain.extent.height,
+                      0.0f,
+                      1.0f};
+  vkCmdSetViewport(cmd, 0u, 1u, &viewport);
+  VkRect2D scissor{0, 0, appCtx.vkCtx.swapchain.extent};
+  vkCmdSetScissor(cmd, 0u, 1u, &scissor);
+
+  vkCmdEndRendering(cmd);
+
+  imgBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  imgBarrier.dstAccessMask = 0u;
+  imgBarrier.oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
+  imgBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                       VK_PIPELINE_STAGE_2_NONE, 0u, 0u, nullptr, 0u, nullptr,
+                       1u, &imgBarrier);
 
   vkEndCommandBuffer(cmd);
 
