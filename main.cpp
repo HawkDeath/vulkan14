@@ -3,6 +3,7 @@
 #include <exception>
 #include <format>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -465,6 +466,90 @@ void initVulkan(AppContext &appCtx) {
   VK_CHECK(vkCreateCommandPool(appCtx.vkCtx.device, &cmdPoolInfo, nullptr,
                                &appCtx.vkCtx.commandPool),
            "Failed to create command pool");
+
+  VkCommandBufferAllocateInfo cmdBufAllocInfo = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+      .pNext = VK_NULL_HANDLE,
+      .commandPool = appCtx.vkCtx.commandPool,
+      .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+      .commandBufferCount =
+          static_cast<uint32_t>(appCtx.vkCtx.commandBuffers.size())
+
+  };
+
+  VK_CHECK(vkAllocateCommandBuffers(appCtx.vkCtx.device, &cmdBufAllocInfo,
+                                    appCtx.vkCtx.commandBuffers.data()),
+           "Failed to allocate command buffers");
+}
+
+void draw(AppContext &appCtx) {
+  auto &currentFrame = appCtx.vkCtx.swapchain.currentFrame;
+  vkWaitForFences(appCtx.vkCtx.device, 1u,
+                  &appCtx.vkCtx.waitFences[currentFrame], VK_TRUE,
+                  std::numeric_limits<uint64_t>::max());
+
+  VK_CHECK(vkResetFences(appCtx.vkCtx.device, 1u,
+                         &appCtx.vkCtx.waitFences[currentFrame]),
+           "Failed to reset fence");
+
+  uint32_t imageIdx = {0u};
+  auto res = vkAcquireNextImageKHR(
+      appCtx.vkCtx.device, appCtx.vkCtx.swapchain.swapchainHandle,
+      std::numeric_limits<uint64_t>::max(),
+      appCtx.vkCtx.presentSemaphores[currentFrame], VK_NULL_HANDLE, &imageIdx);
+
+  auto &cmd = appCtx.vkCtx.commandBuffers[currentFrame];
+  vkResetCommandBuffer(cmd, 0u);
+  VkCommandBufferBeginInfo cmdBegInfo = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      .pNext = VK_NULL_HANDLE,
+      .flags = 0u,
+      .pInheritanceInfo = VK_NULL_HANDLE
+
+  };
+
+  vkBeginCommandBuffer(cmd, &cmdBegInfo);
+
+  vkEndCommandBuffer(cmd);
+
+  VkPipelineStageFlags waitStageMask =
+      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+  VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  submitInfo.pWaitDstStageMask = &waitStageMask;
+  submitInfo.pCommandBuffers = &cmd;
+  submitInfo.commandBufferCount = 1u;
+
+  submitInfo.pWaitSemaphores = &appCtx.vkCtx.presentSemaphores[currentFrame];
+  submitInfo.waitSemaphoreCount = 1u;
+
+  submitInfo.pSignalSemaphores =
+      &appCtx.vkCtx.renderCompleteSemaphores[imageIdx];
+  submitInfo.signalSemaphoreCount = 1u;
+
+  vkQueueSubmit(appCtx.vkCtx.graphicsQueue.queueHandle, 1u, &submitInfo,
+                appCtx.vkCtx.waitFences[currentFrame]);
+
+  VkPresentInfoKHR presentInfo{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+  presentInfo.waitSemaphoreCount = 1u;
+  presentInfo.pWaitSemaphores =
+      &appCtx.vkCtx.renderCompleteSemaphores[imageIdx];
+  presentInfo.swapchainCount = 1u;
+  presentInfo.pSwapchains = &appCtx.vkCtx.swapchain.swapchainHandle;
+  presentInfo.pImageIndices = &imageIdx;
+  res = vkQueuePresentKHR(appCtx.vkCtx.presentQueue.queueHandle, &presentInfo);
+
+  currentFrame = (currentFrame + 1) % SwapChain::MAX_SWAPCHAIN_FRAMES;
+}
+
+void loop(AppContext &appCtx) {
+
+  while (!glfwWindowShouldClose(appCtx.windowCtx.window)) {
+
+    glfwPollEvents(); // input
+
+    draw(appCtx);
+  }
 }
 
 int main() {
@@ -473,6 +558,8 @@ int main() {
   try {
     initWindow(appCtx);
     initVulkan(appCtx);
+    loop(appCtx);
+    // TODO: add shutdown - release resources
 
   } catch (std::exception &e) {
     std::cerr << e.what();
