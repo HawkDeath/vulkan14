@@ -72,9 +72,15 @@ struct VulkanContext {
   std::array<VkCommandBuffer, SwapChain::MAX_SWAPCHAIN_FRAMES> commandBuffers{};
 };
 
+struct TriangleContext {
+  VkPipeline pipline = {VK_NULL_HANDLE};
+  VkDescriptorSetLayout descriptorSetLayout;
+};
+
 struct AppContext {
   WindowContext windowCtx;
   VulkanContext vkCtx;
+  TriangleContext trisCtx;
 };
 
 void initWindow(AppContext &appCtx) {
@@ -156,9 +162,10 @@ void initVulkan(AppContext &appCtx) {
   }
 
   if (appCtx.vkCtx.physicalDevice == VK_NULL_HANDLE)
-    RT_THROW("Failed to choose Vulkan supported GPU");
+    RT_THROW("Failed to select Vulkan supported GPU");
 
-  std::cout << std::format("Choosen {} GPU", appCtx.vkCtx.properties.deviceName)
+  std::cout << std::format("Selected {} GPU",
+                           appCtx.vkCtx.properties.deviceName)
             << "\n";
 
   uint32_t queueFamilyCount = 0u;
@@ -482,6 +489,8 @@ void initVulkan(AppContext &appCtx) {
            "Failed to allocate command buffers");
 }
 
+void initResouces(AppContext &appCtx) {}
+
 void draw(AppContext &appCtx) {
   auto &currentFrame = appCtx.vkCtx.swapchain.currentFrame;
   vkWaitForFences(appCtx.vkCtx.device, 1u,
@@ -625,6 +634,7 @@ int main() {
   try {
     initWindow(appCtx);
     initVulkan(appCtx);
+    initResouces(appCtx);
     loop(appCtx);
     // TODO: add shutdown - release resources
 
