@@ -72,9 +72,24 @@ struct VulkanContext {
   std::array<VkCommandBuffer, SwapChain::MAX_SWAPCHAIN_FRAMES> commandBuffers{};
 };
 
+struct GPUBuffer {
+  VkBuffer buffer = {VK_NULL_HANDLE};
+  VkDeviceMemory memory = {VK_NULL_HANDLE};
+  VkDeviceSize size = {0u};
+
+  void *mapped = nullptr;
+};
+
 struct TriangleContext {
   VkPipeline pipline = {VK_NULL_HANDLE};
-  VkDescriptorSetLayout descriptorSetLayout;
+  VkPipelineLayout piplineLayout = {VK_NULL_HANDLE};
+
+  VkDescriptorSetLayout descriptorSetLayout = {VK_NULL_HANDLE};
+  std::vector<VkDescriptorSet> descriptorSets{};
+  VkDescriptorPool descriptorPool = {VK_NULL_HANDLE};
+
+  GPUBuffer vertexBuffer{};
+  GPUBuffer indicesBuffer{};
 };
 
 struct AppContext {
@@ -489,7 +504,76 @@ void initVulkan(AppContext &appCtx) {
            "Failed to allocate command buffers");
 }
 
-void initResouces(AppContext &appCtx) {}
+void initResouces(AppContext &appCtx) {
+  // create descriptor pool
+  std::array<VkDescriptorPoolSize, 1> poolSizes{};
+  poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  poolSizes[0].descriptorCount =
+      static_cast<uint32_t>(SwapChain::MAX_SWAPCHAIN_FRAMES);
+
+  VkDescriptorPoolCreateInfo descPoolCI = {
+      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+      .pNext = VK_NULL_HANDLE,
+      .flags = 0u,
+      .maxSets = static_cast<uint32_t>(SwapChain::MAX_SWAPCHAIN_FRAMES),
+      .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+      .pPoolSizes = poolSizes.data()
+
+  };
+
+  VK_CHECK(vkCreateDescriptorPool(appCtx.vkCtx.device, &descPoolCI, nullptr,
+                                  &appCtx.trisCtx.descriptorPool),
+           "Failed to create descriptorPool");
+  // create descriptor set layout
+  VkDescriptorSetLayoutCreateInfo descSetLayoutCI{
+      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+      .pNext = VK_NULL_HANDLE,
+      .flags = 0u,
+      .bindingCount = 0u, // TODO add binding
+      .pBindings = VK_NULL_HANDLE,
+
+  };
+
+  VK_CHECK(vkCreateDescriptorSetLayout(appCtx.vkCtx.device, &descSetLayoutCI,
+                                       nullptr,
+                                       &appCtx.trisCtx.descriptorSetLayout),
+           "Failed to create descriptorSetLayout");
+  // create descriptor set
+  std::vector<VkDescriptorSetLayout> layouts{
+      SwapChain::MAX_SWAPCHAIN_FRAMES, appCtx.trisCtx.descriptorSetLayout};
+
+  VkDescriptorSetAllocateInfo allocInfo = {
+      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+      .pNext = VK_NULL_HANDLE,
+      .descriptorPool = appCtx.trisCtx.descriptorPool,
+      .descriptorSetCount = 0u,
+      .pSetLayouts = VK_NULL_HANDLE
+
+  };
+
+  appCtx.trisCtx.descriptorSets.resize(SwapChain::MAX_SWAPCHAIN_FRAMES);
+  VK_CHECK(vkAllocateDescriptorSets(appCtx.vkCtx.device, &allocInfo,
+                                    appCtx.trisCtx.descriptorSets.data()),
+           "Failed to allocate descriptors");
+
+  // create pipline
+}
+
+void renderScene(AppContext &appCtx) {
+
+  auto &cmd = appCtx.vkCtx.commandBuffers[appCtx.vkCtx.swapchain.currentFrame];
+
+  // vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+  //                        appCtx.trisCtx.piplineLayout, 0u, 1u,
+  //                        &appCtx.trisCtx.descriptorSets[0], 0u, nullptr);
+
+  // vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+  //                  appCtx.trisCtx.pipline);
+
+  // vertex buffer and index buffer here - TODO
+
+  // vkCmdDraw(cmd, 3u, 1u, 0u, 0u);
+}
 
 void draw(AppContext &appCtx) {
   auto &currentFrame = appCtx.vkCtx.swapchain.currentFrame;
@@ -574,6 +658,8 @@ void draw(AppContext &appCtx) {
   VkRect2D scissor{0, 0, appCtx.vkCtx.swapchain.extent.width,
                    appCtx.vkCtx.swapchain.extent.height};
   vkCmdSetScissor(cmd, 0u, 1u, &scissor);
+
+  renderScene(appCtx);
 
   vkCmdEndRendering(cmd);
 
