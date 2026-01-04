@@ -532,7 +532,7 @@ void draw(AppContext &appCtx) {
       .resolveImageView = VK_NULL_HANDLE,
       .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
       .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-      .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
       .clearValue = {.color = {1.125f, 0.125f, 0.125f, 1.0f}}
 
   };
@@ -555,7 +555,6 @@ void draw(AppContext &appCtx) {
   };
 
   vkCmdBeginRendering(cmd, &renderingInfo);
-
   VkViewport viewport{0.0f,
                       0.0f,
                       (float)appCtx.vkCtx.swapchain.extent.width,
@@ -563,7 +562,8 @@ void draw(AppContext &appCtx) {
                       0.0f,
                       1.0f};
   vkCmdSetViewport(cmd, 0u, 1u, &viewport);
-  VkRect2D scissor{0, 0, appCtx.vkCtx.swapchain.extent};
+  VkRect2D scissor{0, 0, appCtx.vkCtx.swapchain.extent.width,
+                   appCtx.vkCtx.swapchain.extent.height};
   vkCmdSetScissor(cmd, 0u, 1u, &scissor);
 
   vkCmdEndRendering(cmd);
