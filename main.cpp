@@ -114,6 +114,7 @@ struct GPUBuffer {
 };
 
 struct TriangleContext {
+  VkPipelineCache pipelineCache = {VK_NULL_HANDLE};
   VkPipeline pipline = {VK_NULL_HANDLE};
   VkPipelineLayout piplineLayout = {VK_NULL_HANDLE};
 
@@ -695,6 +696,7 @@ void initResouces(AppContext &appCtx) {
                                   &appCtx.trisCtx.descriptorPool),
            "Failed to create descriptorPool");
   // create descriptor set layout
+    /*
   VkDescriptorSetLayoutCreateInfo descSetLayoutCI{
       .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
       .pNext = VK_NULL_HANDLE,
@@ -709,6 +711,7 @@ void initResouces(AppContext &appCtx) {
                                        &appCtx.trisCtx.descriptorSetLayout),
            "Failed to create descriptorSetLayout");
   // create descriptor set
+
   std::vector<VkDescriptorSetLayout> layouts{
       SwapChain::MAX_SWAPCHAIN_FRAMES, appCtx.trisCtx.descriptorSetLayout};
 
@@ -725,51 +728,140 @@ void initResouces(AppContext &appCtx) {
   VK_CHECK(vkAllocateDescriptorSets(appCtx.vkCtx.device, &allocInfo,
                                     appCtx.trisCtx.descriptorSets.data()),
            "Failed to allocate descriptors");
+*/
+    // create pipeline layout
+    VkPipelineLayoutCreateInfo pipLayoutCI = {
+        .sType =  VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pNext =  VK_NULL_HANDLE,
+        .flags =  0u,
+        .setLayoutCount =  0u,
+        .pSetLayouts = VK_NULL_HANDLE,
+        .pushConstantRangeCount = 0u,
+        .pPushConstantRanges = VK_NULL_HANDLE
+    };
+    VK_CHECK(vkCreatePipelineLayout(appCtx.vkCtx.device, &pipLayoutCI, nullptr, &appCtx.trisCtx.piplineLayout), "Failed to create pipeline layout");
 
   std::vector<VkDynamicState> dynamicStates = {VK_DYNAMIC_STATE_VIEWPORT,
                                                VK_DYNAMIC_STATE_SCISSOR
 
   };
+    VkPipelineDynamicStateCreateInfo dynamicStateCI = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dynamicStateCI.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+    dynamicStateCI.pDynamicStates = dynamicStates.data();
 
-  // create pipline
-  /*
+    VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateCI{ VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+    inputAssemblyStateCI.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    // Rasterization state
+    VkPipelineRasterizationStateCreateInfo rasterizationStateCI{ VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+    rasterizationStateCI.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizationStateCI.cullMode = VK_CULL_MODE_NONE;
+    rasterizationStateCI.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizationStateCI.depthClampEnable = VK_FALSE;
+    rasterizationStateCI.rasterizerDiscardEnable = VK_FALSE;
+    rasterizationStateCI.depthBiasEnable = VK_FALSE;
+    rasterizationStateCI.lineWidth = 1.0f;
+
+    // Color blend state describes how blend factors are calculated (if used)
+    // We need one blend attachment state per color attachment (even if blending is not used)
+    VkPipelineColorBlendAttachmentState blendAttachmentState{};
+    blendAttachmentState.colorWriteMask = 0xf;
+    blendAttachmentState.blendEnable = VK_FALSE;
+    VkPipelineColorBlendStateCreateInfo colorBlendStateCI{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+    colorBlendStateCI.attachmentCount = 1;
+    colorBlendStateCI.pAttachments = &blendAttachmentState;
+
+    // Viewport state sets the number of viewports and scissor used in this pipeline
+    // Note: This is actually overridden by the dynamic states (see below)
+    VkPipelineViewportStateCreateInfo viewportStateCI{ VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+    viewportStateCI.viewportCount = 1;
+    viewportStateCI.scissorCount = 1;
+
+    auto vBindingins = Vertex::bindingDesc();
+    auto vAttribs = Vertex::attributeDescriptions();
+    VkPipelineVertexInputStateCreateInfo pipVertInputCI  = {
+        .sType =  VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .pNext = VK_NULL_HANDLE,
+        .flags = 0u,
+        .vertexBindingDescriptionCount = 1u,
+        .pVertexBindingDescriptions = &vBindingins,
+        .vertexAttributeDescriptionCount =  static_cast<uint32_t>(vAttribs.size()),
+        .pVertexAttributeDescriptions = vAttribs.data()
+    };
+
+    std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages{};
+    shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[0].pNext = VK_NULL_HANDLE;
+    shaderStages[0].flags = 0u;
+    shaderStages[0].pNext = "vertexMain";
+    shaderStages[0].stage =  VK_SHADER_STAGE_VERTEX_BIT;
+    shaderStages[0].pSpecializationInfo = VK_NULL_HANDLE;
+    // shaderStages[0].module =
+
+    shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[1].pNext = VK_NULL_HANDLE;
+    shaderStages[1].flags = 0u;
+    shaderStages[1].pNext = "fragmentMain";
+    shaderStages[1].stage =  VK_SHADER_STAGE_FRAGMENT_BIT;
+    shaderStages[1].pSpecializationInfo = VK_NULL_HANDLE;
+    // shaderStages[1].module =
+    // TODO - add loading shader - slang
+
+    VkPipelineRenderingCreateInfo pipRenderingCI = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+        .pNext =  VK_NULL_HANDLE,
+        .colorAttachmentCount =  1u,
+        .pColorAttachmentFormats = &appCtx.vkCtx.swapchain.colorFormat,
+        .depthAttachmentFormat = VK_FORMAT_UNDEFINED,
+        .stencilAttachmentFormat = VK_FORMAT_UNDEFINED
+    };
+
+    VkPipelineMultisampleStateCreateInfo mulisampleCI = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+    mulisampleCI.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
   VkGraphicsPipelineCreateInfo pipelineInfo = {
       .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-      .pNext = VK_NULL_HANDLE,
+      .pNext = &pipRenderingCI,
       .flags = 0u,
-      .stageCount =,
-      .pStages =,
-      .pVertexInputState =,
-      .pInputAssemblyState =,
+      .stageCount = static_cast<uint32_t>(shaderStages.size()),
+      .pStages = shaderStages.data(),
+      .pVertexInputState = &pipVertInputCI,
+      .pInputAssemblyState = &inputAssemblyStateCI,
       .pTessellationState = VK_NULL_HANDLE,
-      .pViewportState =,
-      .pRasterizationState =,
-      .pMultisampleState =,
-      .pDepthStencilState =,
-      .pColorBlendState =,
-      .pDynamicState = dynamicStates.data(),
+      .pViewportState = &viewportStateCI,
+      .pRasterizationState = &rasterizationStateCI,
+      .pMultisampleState = &mulisampleCI,
+      .pDepthStencilState = VK_NULL_HANDLE,
+      .pColorBlendState = &colorBlendStateCI,
+      .pDynamicState = &dynamicStateCI,
       .layout = appCtx.trisCtx.piplineLayout,
       .renderPass = VK_NULL_HANDLE,
-      .subpass,
-      .basePipelineHandle,
-      .basePipelineIndex};
-  */
+      .subpass = 0u,
+      .basePipelineHandle = VK_NULL_HANDLE,
+      .basePipelineIndex = 0u
+  };
+    VkPipelineCacheCreateInfo pipCacheCI = {VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    VK_CHECK(vkCreatePipelineCache(appCtx.vkCtx.device, &pipCacheCI, nullptr, &appCtx.trisCtx.pipelineCache), "Failed to create pipeline cache object");
+    // VK_CHECK(vkCreateGraphicsPipelines(appCtx.vkCtx.device, appCtx.trisCtx.pipelineCache, 1u, &pipelineInfo, nullptr, &appCtx.trisCtx.pipline), "Failed to create pipeline");
 }
 
 void renderScene(AppContext &appCtx) {
+/*
+    auto &cmd = appCtx.vkCtx.commandBuffers[appCtx.vkCtx.swapchain.currentFrame];
 
-  auto &cmd = appCtx.vkCtx.commandBuffers[appCtx.vkCtx.swapchain.currentFrame];
+   // vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+   //                       appCtx.trisCtx.piplineLayout, 0u, 1u,
+   //                       &appCtx.trisCtx.descriptorSets[0], 0u, nullptr);
 
-  // vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-  //                        appCtx.trisCtx.piplineLayout, 0u, 1u,
-  //                        &appCtx.trisCtx.descriptorSets[0], 0u, nullptr);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, appCtx.trisCtx.pipline);
 
-  // vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-  //                  appCtx.trisCtx.pipline);
+    VkDeviceSize offsets[1]{ 0 };
+    vkCmdBindVertexBuffers(cmd, 0u, 1u, &appCtx.trisCtx.vertexBuffer.buffer, offsets);
+    vkCmdBindIndexBuffer(cmd, appCtx.trisCtx.indicesBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
-  // vertex buffer and index buffer here - TODO
 
-  // vkCmdDraw(cmd, 3u, 1u, 0u, 0u);
+   vkCmdDrawIndexed(cmd, 3u, 1u, 0u, 0u, 0u);
+   */
 }
 
 void draw(AppContext &appCtx) {
