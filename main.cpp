@@ -16,6 +16,10 @@
 
 #include <glm/glm.hpp>
 
+#include <slang-com-ptr.h>
+#include <slang-rhi.h>
+#include <slang-rhi/shader-cursor.h>
+
 #define RT_THROW(msg) throw std::runtime_error(msg);
 
 #define VK_CHECK(x, msg)                                                       \
@@ -216,6 +220,11 @@ void copyBuffer(const VulkanContext& vkCtx, const GPUBuffer& srcBuffer, const GP
     vkCmdCopyBuffer(cmd, srcBuffer.buffer, dstBuffer.buffer, 1u, &req);
 
     endSingleTimeCommands(vkCtx, cmd);
+}
+
+void loadShader(const std::string& path) {
+    slang::ISession* slangSession;
+
 }
 
 void initWindow(AppContext &appCtx) {
