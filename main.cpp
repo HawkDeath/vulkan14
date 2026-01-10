@@ -1,5 +1,6 @@
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <format>
 #include <iostream>
@@ -13,6 +14,8 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
+#include <glm/glm.hpp>
+
 #define RT_THROW(msg) throw std::runtime_error(msg);
 
 #define VK_CHECK(x, msg)                                                       \
@@ -21,6 +24,36 @@
       RT_THROW(msg)                                                            \
     }                                                                          \
   } while (0)
+
+struct Vertex {
+    glm::vec3 position = { 0.0f,  0.0f,  0.0f};
+    glm::vec3 color ={1.0f, 1.0f, 1.0f};
+
+    static VkVertexInputBindingDescription bindingDesc() {
+        VkVertexInputBindingDescription bindings{};
+        bindings.binding = 0u;
+        bindings.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+        bindings.stride = sizeof(Vertex);
+        return bindings;
+    }
+
+    static std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions() {
+        std::array<VkVertexInputAttributeDescription, 2> attrib{};
+        // postion
+        attrib[0].binding = 0;
+        attrib[0].location = 0;
+        attrib[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+        attrib[0].offset = offsetof(Vertex, position);
+
+        attrib[1].binding = 0;
+        attrib[1].location = 1;
+        attrib[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+        attrib[1].offset = offsetof(Vertex, color);
+
+        return attrib;
+    }
+
+};
 
 struct WindowContext {
   GLFWwindow *window = nullptr;
@@ -97,6 +130,92 @@ struct AppContext {
   VulkanContext vkCtx;
   TriangleContext trisCtx;
 };
+
+uint32_t findMemoryType(const VulkanContext &vkCtx, uint32_t type, VkMemoryPropertyFlags props) {
+    VkPhysicalDeviceMemoryProperties memProps;
+    vkGetPhysicalDeviceMemoryProperties(vkCtx.physicalDevice, &memProps);
+
+    for (uint32_t i = 0u; i < memProps.memoryTypeCount; ++i) {
+        if ( (type & (1<< i)) && (memProps.memoryTypes[i].propertyFlags & props) == props) {
+            return i;
+        }
+    }
+    RT_THROW("Failed to find suitable memory type");
+}
+
+VkCommandBuffer beginSingleTimeCommands(const VulkanContext &vkCtx) {
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandPool = vkCtx.commandPool;
+    allocInfo.commandBufferCount = 1;
+
+    VkCommandBuffer commandBuffer;
+    vkAllocateCommandBuffers(vkCtx.device, &allocInfo, &commandBuffer);
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+    return commandBuffer;
+}
+
+void endSingleTimeCommands(const VulkanContext& vkCtx, VkCommandBuffer commandBuffer) {
+    vkEndCommandBuffer(commandBuffer);
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &commandBuffer;
+
+    vkQueueSubmit(vkCtx.graphicsQueue.queueHandle, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(vkCtx.graphicsQueue.queueHandle);
+
+    vkFreeCommandBuffers(vkCtx.device, vkCtx.commandPool, 1, &commandBuffer);
+}
+
+void createBuffer(const VulkanContext& vkCtx, GPUBuffer& outBuffer, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties) {
+    outBuffer.size = size;
+
+    VkBufferCreateInfo buffInfo = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .pNext = VK_NULL_HANDLE,
+        .flags =  0u,
+        .size = outBuffer.size,
+        .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 0u,
+        .pQueueFamilyIndices =  VK_NULL_HANDLE
+    };
+
+    VK_CHECK(vkCreateBuffer(vkCtx.device, &buffInfo, nullptr, &outBuffer.buffer), "Failed to create buffer");
+
+    VkMemoryRequirements reqMem;
+    vkGetBufferMemoryRequirements(vkCtx.device, outBuffer.buffer, &reqMem);
+
+    VkMemoryAllocateInfo allocInfo = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = VK_NULL_HANDLE,
+        .allocationSize = reqMem.size,
+        .memoryTypeIndex = findMemoryType(vkCtx, reqMem.memoryTypeBits, properties)
+    };
+
+    VK_CHECK(vkAllocateMemory(vkCtx.device, &allocInfo, nullptr, &outBuffer.memory), "Failed to allocate memory");
+
+    vkBindBufferMemory(vkCtx.device, outBuffer.buffer, outBuffer.memory, 0u);
+}
+
+void copyBuffer(const VulkanContext& vkCtx, const GPUBuffer& srcBuffer, const GPUBuffer& dstBuffer, VkDeviceSize size) {
+    VkCommandBuffer cmd = beginSingleTimeCommands(vkCtx);
+
+    VkBufferCopy req{};
+    req.size = size;
+    vkCmdCopyBuffer(cmd, srcBuffer.buffer, dstBuffer.buffer, 1u, &req);
+
+    endSingleTimeCommands(vkCtx, cmd);
+}
 
 void initWindow(AppContext &appCtx) {
   glfwSetErrorCallback([](int code, const char *desc) -> void {
@@ -505,6 +624,57 @@ void initVulkan(AppContext &appCtx) {
 }
 
 void initResouces(AppContext &appCtx) {
+  // prepare geometry
+    std::array<Vertex, 3> trisGeom{};
+    trisGeom[0].position = {-0.5f, -0.5f, 1.0f};
+    trisGeom[0].color = {0.0f, 0.0f, 1.0f};
+
+    trisGeom[1].position = {0.5f, -0.5f, 1.0f};
+    trisGeom[1].color = {0.0f, 1.0f, 0.0f};
+
+    trisGeom[2].position = {0.0f, 0.5f, 1.0f};
+    trisGeom[2].color = {1.0f, 0.0f, 0.0f};
+
+    uint32_t indices[] = {0, 1, 2};
+
+  // create vertex buffer
+    {
+        constexpr auto vbuffSize = static_cast<VkDeviceSize>(sizeof(Vertex) * trisGeom.size());
+        GPUBuffer stagingBuff;
+        createBuffer(appCtx.vkCtx, stagingBuff, vbuffSize ,VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        vkMapMemory(appCtx.vkCtx.device, stagingBuff.memory, 0u, vbuffSize, 0u, &stagingBuff.mapped);
+        memcpy(stagingBuff.mapped, trisGeom.data(), static_cast<size_t>(vbuffSize));
+        vkUnmapMemory(appCtx.vkCtx.device, stagingBuff.memory);
+
+        createBuffer(appCtx.vkCtx, appCtx.trisCtx.vertexBuffer, vbuffSize,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+        copyBuffer(appCtx.vkCtx, stagingBuff, appCtx.trisCtx.vertexBuffer, vbuffSize);
+
+        vkDestroyBuffer(appCtx.vkCtx.device, stagingBuff.buffer, nullptr);
+        vkFreeMemory(appCtx.vkCtx.device, stagingBuff.memory, nullptr);
+    }
+
+  // create index buffer
+    {
+        constexpr auto ibuffSize = static_cast<VkDeviceSize>(sizeof(uint32_t) * 3);
+        GPUBuffer stagingBuff;
+        createBuffer(appCtx.vkCtx, stagingBuff, ibuffSize ,VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        vkMapMemory(appCtx.vkCtx.device, stagingBuff.memory, 0u, ibuffSize, 0u, &stagingBuff.mapped);
+        memcpy(stagingBuff.mapped, &indices, static_cast<size_t>(ibuffSize));
+        vkUnmapMemory(appCtx.vkCtx.device, stagingBuff.memory);
+
+        createBuffer(appCtx.vkCtx, appCtx.trisCtx.indicesBuffer, ibuffSize,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+        copyBuffer(appCtx.vkCtx, stagingBuff, appCtx.trisCtx.indicesBuffer, ibuffSize);
+
+        vkDestroyBuffer(appCtx.vkCtx.device, stagingBuff.buffer, nullptr);
+        vkFreeMemory(appCtx.vkCtx.device, stagingBuff.memory, nullptr);
+    }
+
   // create descriptor pool
   std::array<VkDescriptorPoolSize, 1> poolSizes{};
   poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -556,7 +726,34 @@ void initResouces(AppContext &appCtx) {
                                     appCtx.trisCtx.descriptorSets.data()),
            "Failed to allocate descriptors");
 
+  std::vector<VkDynamicState> dynamicStates = {VK_DYNAMIC_STATE_VIEWPORT,
+                                               VK_DYNAMIC_STATE_SCISSOR
+
+  };
+
   // create pipline
+  /*
+  VkGraphicsPipelineCreateInfo pipelineInfo = {
+      .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+      .pNext = VK_NULL_HANDLE,
+      .flags = 0u,
+      .stageCount =,
+      .pStages =,
+      .pVertexInputState =,
+      .pInputAssemblyState =,
+      .pTessellationState = VK_NULL_HANDLE,
+      .pViewportState =,
+      .pRasterizationState =,
+      .pMultisampleState =,
+      .pDepthStencilState =,
+      .pColorBlendState =,
+      .pDynamicState = dynamicStates.data(),
+      .layout = appCtx.trisCtx.piplineLayout,
+      .renderPass = VK_NULL_HANDLE,
+      .subpass,
+      .basePipelineHandle,
+      .basePipelineIndex};
+  */
 }
 
 void renderScene(AppContext &appCtx) {
