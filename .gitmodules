@@ -7,3 +7,6 @@
 [submodule "deps/slang"]
 	path = deps/slang
 	url = https://github.com/shader-slang/slang.git
+[submodule "deps/VMA"]
+	path = deps/VMA
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git

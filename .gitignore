@@ -45,6 +45,7 @@ output/
 .vs/
 .vscode/
 build/
+build_rel/
 .zed/
 
 .idea/
