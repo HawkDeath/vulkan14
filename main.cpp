@@ -114,8 +114,8 @@ struct VulkanContext {
 };
 
 struct GPUBuffer {
+    VmaAllocation bufferAllocation = {VK_NULL_HANDLE};
     VkBuffer buffer = {VK_NULL_HANDLE};
-    VkDeviceMemory memory = {VK_NULL_HANDLE};
     VkDeviceSize size = {0u};
 
     void *mapped = nullptr;
@@ -130,8 +130,7 @@ struct TriangleContext {
     std::vector<VkDescriptorSet> descriptorSets{};
     VkDescriptorPool descriptorPool = {VK_NULL_HANDLE};
 
-    GPUBuffer vertexBuffer{};
-    GPUBuffer indicesBuffer{};
+    GPUBuffer gpuBuffer{}; // vertex + index buffer in one buffer
 };
 
 struct AppContext {
@@ -183,48 +182,6 @@ void endSingleTimeCommands(const VulkanContext &vkCtx, VkCommandBuffer commandBu
     vkQueueWaitIdle(vkCtx.graphicsQueue.queueHandle);
 
     vkFreeCommandBuffers(vkCtx.device, vkCtx.commandPool, 1, &commandBuffer);
-}
-
-void createBuffer(const VulkanContext &vkCtx, GPUBuffer &outBuffer, VkDeviceSize size, VkBufferUsageFlags usage,
-                  VkMemoryPropertyFlags properties) {
-    outBuffer.size = size;
-
-    VkBufferCreateInfo buffInfo = {
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .pNext = VK_NULL_HANDLE,
-        .flags = 0u,
-        .size = outBuffer.size,
-        .usage = usage,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        .queueFamilyIndexCount = 0u,
-        .pQueueFamilyIndices = VK_NULL_HANDLE
-    };
-
-    VK_CHECK(vkCreateBuffer(vkCtx.device, &buffInfo, nullptr, &outBuffer.buffer), "Failed to create buffer");
-
-    VkMemoryRequirements reqMem;
-    vkGetBufferMemoryRequirements(vkCtx.device, outBuffer.buffer, &reqMem);
-
-    VkMemoryAllocateInfo allocInfo = {
-        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-        .pNext = VK_NULL_HANDLE,
-        .allocationSize = reqMem.size,
-        .memoryTypeIndex = findMemoryType(vkCtx, reqMem.memoryTypeBits, properties)
-    };
-
-    VK_CHECK(vkAllocateMemory(vkCtx.device, &allocInfo, nullptr, &outBuffer.memory), "Failed to allocate memory");
-
-    vkBindBufferMemory(vkCtx.device, outBuffer.buffer, outBuffer.memory, 0u);
-}
-
-void copyBuffer(const VulkanContext &vkCtx, const GPUBuffer &srcBuffer, const GPUBuffer &dstBuffer, VkDeviceSize size) {
-    VkCommandBuffer cmd = beginSingleTimeCommands(vkCtx);
-
-    VkBufferCopy req{};
-    req.size = size;
-    vkCmdCopyBuffer(cmd, srcBuffer.buffer, dstBuffer.buffer, 1u, &req);
-
-    endSingleTimeCommands(vkCtx, cmd);
 }
 
 void loadShader(const std::string &path) {
@@ -409,6 +366,11 @@ void initVulkan(AppContext &appCtx) {
                  &appCtx.vkCtx.device),
              "Failed to create logical device");
 
+    // VMA init
+    VmaVulkanFunctions vmaVkFUnctions {.vkGetInstanceProcAddr = ::vkGetInstanceProcAddr, .vkGetDeviceProcAddr = ::vkGetDeviceProcAddr, .vkCreateImage = ::vkCreateImage};
+    VmaAllocatorCreateInfo vmaAllocInfo {.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT, .physicalDevice = appCtx.vkCtx.physicalDevice, .device = appCtx.vkCtx.device, .pVulkanFunctions = &vmaVkFUnctions, .instance = appCtx.vkCtx.instance};
+    VK_CHECK(vmaCreateAllocator(&vmaAllocInfo, &appCtx.vkCtx.allocator), "Failed to create VMA allocator");
+
     vkGetDeviceQueue(appCtx.vkCtx.device, appCtx.vkCtx.graphicsQueue.idx.value(),
                      0u, &appCtx.vkCtx.graphicsQueue.queueHandle);
     vkGetDeviceQueue(appCtx.vkCtx.device, appCtx.vkCtx.presentQueue.idx.value(),
@@ -432,7 +394,7 @@ void initVulkan(AppContext &appCtx) {
 
     VkSurfaceFormatKHR selectedFormat =
             surfaceFormats[0]; // get first available format as default
-    std::vector<VkFormat> preferredFormats = {
+    std::vector preferredFormats = {
         VK_FORMAT_B8G8R8A8_UNORM,
         VK_FORMAT_R8G8B8A8_UNORM,
         VK_FORMAT_A8B8G8R8_UNORM_PACK32
@@ -663,45 +625,19 @@ void initResouces(AppContext &appCtx) {
 
     uint32_t indices[] = {0, 1, 2};
 
-    // create vertex buffer
-    {
-        constexpr auto vbuffSize = static_cast<VkDeviceSize>(sizeof(Vertex) * trisGeom.size());
-        GPUBuffer stagingBuff;
-        createBuffer(appCtx.vkCtx, stagingBuff, vbuffSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        vkMapMemory(appCtx.vkCtx.device, stagingBuff.memory, 0u, vbuffSize, 0u, &stagingBuff.mapped);
-        memcpy(stagingBuff.mapped, trisGeom.data(), static_cast<size_t>(vbuffSize));
-        vkUnmapMemory(appCtx.vkCtx.device, stagingBuff.memory);
 
-        createBuffer(appCtx.vkCtx, appCtx.trisCtx.vertexBuffer, vbuffSize,
-                     VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    constexpr auto vbuffSize = static_cast<VkDeviceSize>(sizeof(Vertex) * trisGeom.size());
+    constexpr auto ibuffSize = static_cast<VkDeviceSize>(sizeof(uint32_t) * 3);
+    appCtx.trisCtx.gpuBuffer.size = vbuffSize + ibuffSize;
+    VkBufferCreateInfo buffCI {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = appCtx.trisCtx.gpuBuffer.size, .usage =  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |  VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
+    VmaAllocationCreateInfo buffAllocCI {.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT, .usage = VMA_MEMORY_USAGE_AUTO};
+    VK_CHECK(vmaCreateBuffer(appCtx.vkCtx.allocator, &buffCI, &buffAllocCI, &appCtx.trisCtx.gpuBuffer.buffer, &appCtx.trisCtx.gpuBuffer.bufferAllocation, nullptr), "Failed to create tris buffer");
 
-        copyBuffer(appCtx.vkCtx, stagingBuff, appCtx.trisCtx.vertexBuffer, vbuffSize);
-
-        vkDestroyBuffer(appCtx.vkCtx.device, stagingBuff.buffer, nullptr);
-        vkFreeMemory(appCtx.vkCtx.device, stagingBuff.memory, nullptr);
-    }
-
-    // create index buffer
-    {
-        constexpr auto ibuffSize = static_cast<VkDeviceSize>(sizeof(uint32_t) * 3);
-        GPUBuffer stagingBuff;
-        createBuffer(appCtx.vkCtx, stagingBuff, ibuffSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        vkMapMemory(appCtx.vkCtx.device, stagingBuff.memory, 0u, ibuffSize, 0u, &stagingBuff.mapped);
-        memcpy(stagingBuff.mapped, &indices, static_cast<size_t>(ibuffSize));
-        vkUnmapMemory(appCtx.vkCtx.device, stagingBuff.memory);
-
-        createBuffer(appCtx.vkCtx, appCtx.trisCtx.indicesBuffer, ibuffSize,
-                     VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-        copyBuffer(appCtx.vkCtx, stagingBuff, appCtx.trisCtx.indicesBuffer, ibuffSize);
-
-        vkDestroyBuffer(appCtx.vkCtx.device, stagingBuff.buffer, nullptr);
-        vkFreeMemory(appCtx.vkCtx.device, stagingBuff.memory, nullptr);
-    }
+    void* pBuffMap = nullptr; // address of GPU memory
+    VK_CHECK(vmaMapMemory(appCtx.vkCtx.allocator, appCtx.trisCtx.gpuBuffer.bufferAllocation, &pBuffMap), "Failed to map buffer memory");
+    memcpy(pBuffMap, trisGeom.data(), vbuffSize); // copy vertices
+    memcpy(((char*)pBuffMap) + vbuffSize, indices, ibuffSize); // copy indices
+    vmaUnmapMemory(appCtx.vkCtx.allocator, appCtx.trisCtx.gpuBuffer.bufferAllocation);
 
     // create descriptor pool
     std::array<VkDescriptorPoolSize, 1> poolSizes{};
