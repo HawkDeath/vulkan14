@@ -118,6 +118,8 @@ struct GPUBuffer {
     VmaAllocation bufferAllocation = {VK_NULL_HANDLE};
     VkBuffer buffer = {VK_NULL_HANDLE};
     VkDeviceSize size = {0u};
+    VkDeviceSize vertexBufferSize {0u};
+    VkDeviceSize indexBufferSize {0u};
 
     void *mapped = nullptr;
 };
@@ -677,6 +679,8 @@ void initResouces(AppContext &appCtx) {
 
     constexpr auto vbuffSize = static_cast<VkDeviceSize>(sizeof(Vertex) * trisGeom.size());
     constexpr auto ibuffSize = static_cast<VkDeviceSize>(sizeof(uint32_t) * 3);
+    appCtx.trisCtx.gpuBuffer.vertexBufferSize = vbuffSize;
+    appCtx.trisCtx.gpuBuffer.indexBufferSize = ibuffSize;
     appCtx.trisCtx.gpuBuffer.size = vbuffSize + ibuffSize;
     VkBufferCreateInfo buffCI {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = appCtx.trisCtx.gpuBuffer.size, .usage =  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |  VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
     VmaAllocationCreateInfo buffAllocCI {.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT, .usage = VMA_MEMORY_USAGE_AUTO};
@@ -812,15 +816,15 @@ void initResouces(AppContext &appCtx) {
     shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     shaderStages[0].pNext = VK_NULL_HANDLE;
     shaderStages[0].flags = 0u;
-    shaderStages[0].pNext = "main";
+    shaderStages[0].pName = "main";
     shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
     shaderStages[0].pSpecializationInfo = VK_NULL_HANDLE;
-    shaderStages[0].module =shader;
+    shaderStages[0].module = shader;
 
     shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     shaderStages[1].pNext = VK_NULL_HANDLE;
     shaderStages[1].flags = 0u;
-    shaderStages[1].pNext = "main";
+    shaderStages[1].pName = "main";
     shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     shaderStages[1].pSpecializationInfo = VK_NULL_HANDLE;
     shaderStages[1].module = shader;
@@ -861,11 +865,11 @@ void initResouces(AppContext &appCtx) {
     VkPipelineCacheCreateInfo pipCacheCI = {VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
     VK_CHECK(vkCreatePipelineCache(appCtx.vkCtx.device, &pipCacheCI, nullptr, &appCtx.trisCtx.pipelineCache),
              "Failed to create pipeline cache object");
-    // VK_CHECK(vkCreateGraphicsPipelines(appCtx.vkCtx.device, appCtx.trisCtx.pipelineCache, 1u, &pipelineInfo, nullptr, &appCtx.trisCtx.pipline), "Failed to create pipeline");
+    VK_CHECK(vkCreateGraphicsPipelines(appCtx.vkCtx.device, appCtx.trisCtx.pipelineCache, 1u, &pipelineInfo, nullptr, &appCtx.trisCtx.pipline), "Failed to create pipeline");
 }
 
 void renderScene(AppContext &appCtx) {
-    /*
+
         auto &cmd = appCtx.vkCtx.commandBuffers[appCtx.vkCtx.swapchain.currentFrame];
 
        // vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -875,12 +879,12 @@ void renderScene(AppContext &appCtx) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, appCtx.trisCtx.pipline);
 
         VkDeviceSize offsets[1]{ 0 };
-        vkCmdBindVertexBuffers(cmd, 0u, 1u, &appCtx.trisCtx.vertexBuffer.buffer, offsets);
-        vkCmdBindIndexBuffer(cmd, appCtx.trisCtx.indicesBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdBindVertexBuffers(cmd, 0u, 1u, &appCtx.trisCtx.gpuBuffer.buffer, offsets);
+        vkCmdBindIndexBuffer(cmd, appCtx.trisCtx.gpuBuffer.buffer, appCtx.trisCtx.gpuBuffer.vertexBufferSize, VK_INDEX_TYPE_UINT32);
 
 
        vkCmdDrawIndexed(cmd, 3u, 1u, 0u, 0u, 0u);
-       */
+
 }
 
 void draw(AppContext &appCtx) {
