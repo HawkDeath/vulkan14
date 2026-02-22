@@ -100,6 +100,7 @@ struct VulkanContext {
     Queue computeQueue = {};
 
     VkPhysicalDeviceProperties properties;
+    VkPhysicalDeviceVulkan12Features vulkan12Features{};
     VkPhysicalDeviceVulkan13Features vulkan13Features{};
     VkPhysicalDeviceVulkan14Features vulkan14Features{};
 
@@ -184,8 +185,49 @@ void endSingleTimeCommands(const VulkanContext &vkCtx, VkCommandBuffer commandBu
     vkFreeCommandBuffers(vkCtx.device, vkCtx.commandPool, 1, &commandBuffer);
 }
 
-void loadShader(const std::string &path) {
-    slang::ISession *slangSession;
+VkShaderModule loadShader(AppContext &appCtx, const std::string &path) {
+    Slang::ComPtr<slang::IGlobalSession> globalSlangSession;
+
+    slang::createGlobalSession(globalSlangSession.writeRef());
+    auto slangTraget {std::to_array<slang::TargetDesc>( { {.format {SLANG_SPIRV}, .profile{globalSlangSession->findProfile("spirv_1_4")}}
+    } )};
+    auto slangOptions {std::to_array<slang::CompilerOptionEntry>( {
+        {
+            slang::CompilerOptionName::EmitSpirvDirectly,
+            {slang::CompilerOptionValueKind::Int, 1}
+        }})};
+
+    slang::SessionDesc slangSessionDesc {
+        .targets{slangTraget.data()},
+        .targetCount { SlangInt(slangTraget.size())},
+        .defaultMatrixLayoutMode {SLANG_MATRIX_LAYOUT_COLUMN_MAJOR},
+        .compilerOptionEntries {slangOptions.data()},
+        .compilerOptionEntryCount {uint32_t(slangOptions.size())}
+    };
+
+    Slang::ComPtr<slang::ISession> slangSession;
+    globalSlangSession->createSession( slangSessionDesc, slangSession.writeRef());
+    Slang::ComPtr<slang::IBlob> diagnosticsBlob;
+    Slang::ComPtr<slang::IModule> slangModule {
+        slangSession->loadModuleFromSource("triangle", path.c_str(), nullptr, diagnosticsBlob.writeRef())
+    };
+    if (diagnosticsBlob != nullptr) {
+        std::cout << "Spir-v errors:" << std::endl;
+        std::cout << (const char*)diagnosticsBlob->getBufferPointer() << std::endl;
+        exit(-3);
+    }
+    Slang::ComPtr<ISlangBlob> spirvBlob;
+    slangModule->getTargetCode(0, spirvBlob.writeRef());
+
+    VkShaderModuleCreateInfo shaderCI {
+    .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+    .pNext = VK_NULL_HANDLE,
+    .codeSize = spirvBlob->getBufferSize(),
+    .pCode = (uint32_t*)spirvBlob->getBufferPointer()};
+
+    VkShaderModule shader;
+    VK_CHECK(vkCreateShaderModule(appCtx.vkCtx.device, &shaderCI, nullptr, &shader), "Failed to load and/or compile shader");
+    return shader;
 }
 
 void initWindow(AppContext &appCtx) {
@@ -332,16 +374,24 @@ void initVulkan(AppContext &appCtx) {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME
     };
     // prepare Vulkan1.4 features
+    appCtx.vkCtx.vulkan12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    appCtx.vkCtx.vulkan12Features.descriptorIndexing = VK_TRUE;
+    appCtx.vkCtx.vulkan12Features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    appCtx.vkCtx.vulkan12Features.descriptorBindingVariableDescriptorCount = VK_TRUE;
+    appCtx.vkCtx.vulkan12Features.runtimeDescriptorArray = VK_TRUE;
+    appCtx.vkCtx.vulkan12Features.bufferDeviceAddress = VK_TRUE;
+
     appCtx.vkCtx.vulkan13Features.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-    appCtx.vkCtx.vulkan13Features.pNext = VK_NULL_HANDLE;
+    appCtx.vkCtx.vulkan13Features.pNext = &appCtx.vkCtx.vulkan12Features;
     appCtx.vkCtx.vulkan13Features.dynamicRendering = VK_TRUE;
     appCtx.vkCtx.vulkan13Features.synchronization2 = VK_TRUE;
+
     appCtx.vkCtx.vulkan14Features.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES;
     appCtx.vkCtx.vulkan14Features.pNext = &appCtx.vkCtx.vulkan13Features;
 
-    VkPhysicalDeviceFeatures enabledFeatures{};
+    VkPhysicalDeviceFeatures enabledFeatures{.samplerAnisotropy = VK_TRUE};
 
     VkPhysicalDeviceFeatures2 reqDeviceFeatures{};
     reqDeviceFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
@@ -553,7 +603,6 @@ void initVulkan(AppContext &appCtx) {
             .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
             .pNext = VK_NULL_HANDLE,
             .flags = VK_FENCE_CREATE_SIGNALED_BIT
-
         };
 
         VK_CHECK(vkCreateFence(appCtx.vkCtx.device, &fenceCI, nullptr,
@@ -757,24 +806,24 @@ void initResouces(AppContext &appCtx) {
         .vertexAttributeDescriptionCount = static_cast<uint32_t>(vAttribs.size()),
         .pVertexAttributeDescriptions = vAttribs.data()
     };
+    auto shader = loadShader(appCtx, "shader/tris.slang");
 
     std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages{};
     shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     shaderStages[0].pNext = VK_NULL_HANDLE;
     shaderStages[0].flags = 0u;
-    shaderStages[0].pNext = "vertexMain";
+    shaderStages[0].pNext = "main";
     shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
     shaderStages[0].pSpecializationInfo = VK_NULL_HANDLE;
-    // shaderStages[0].module =
+    shaderStages[0].module =shader;
 
     shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     shaderStages[1].pNext = VK_NULL_HANDLE;
     shaderStages[1].flags = 0u;
-    shaderStages[1].pNext = "fragmentMain";
+    shaderStages[1].pNext = "main";
     shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     shaderStages[1].pSpecializationInfo = VK_NULL_HANDLE;
-    // shaderStages[1].module =
-    // TODO - add loading shader - slang
+    shaderStages[1].module = shader;
 
     VkPipelineRenderingCreateInfo pipRenderingCI = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
