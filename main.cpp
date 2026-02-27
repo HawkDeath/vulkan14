@@ -23,6 +23,9 @@
 #include <slang-rhi.h>
 #include <slang-rhi/shader-cursor.h>
 
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
+
 #define RT_THROW(msg) throw std::runtime_error(msg);
 
 #define VK_CHECK(x, msg)                                                       \
@@ -34,7 +37,7 @@
 
 struct Vertex {
     glm::vec3 position = {0.0f, 0.0f, 0.0f};
-    glm::vec3 color = {1.0f, 1.0f, 1.0f};
+    glm::vec3 color = {0.125f, 0.125f, 0.125f};
 
     static VkVertexInputBindingDescription bindingDesc() {
         VkVertexInputBindingDescription bindings{};
@@ -128,11 +131,12 @@ struct GPUBuffer {
     VkDeviceSize size = {0u};
     VkDeviceSize vertexBufferSize {0u};
     VkDeviceSize indexBufferSize {0u};
+    uint32_t indexCount {0};
 
     void *mapped = nullptr;
 };
 
-struct TriangleContext {
+struct ModelContext {
     VkPipelineCache pipelineCache = {VK_NULL_HANDLE};
     VkPipeline pipline = {VK_NULL_HANDLE};
     VkPipelineLayout piplineLayout = {VK_NULL_HANDLE};
@@ -147,7 +151,7 @@ struct TriangleContext {
 struct AppContext {
     WindowContext windowCtx;
     VulkanContext vkCtx;
-    TriangleContext trisCtx;
+    ModelContext modelCtx;
 };
 
 uint32_t findMemoryType(const VulkanContext &vkCtx, uint32_t type, VkMemoryPropertyFlags props) {
@@ -712,33 +716,41 @@ void initVulkan(AppContext &appCtx) {
 
 void initResouces(AppContext &appCtx) {
     // prepare geometry
-    std::array<Vertex, 3> trisGeom{};
-    trisGeom[0].position = {-0.5f, -0.5f, 1.0f};
-    trisGeom[0].color = {0.0f, 0.0f, 1.0f};
+    tinyobj::attrib_t attrib;
+    std::vector<tinyobj::shape_t> shapes;
+    std::vector<tinyobj::material_t> materials;
+    tinyobj::LoadObj(&attrib, &shapes, &materials, nullptr, nullptr, "assets/monkey.obj");
+    appCtx.modelCtx.gpuBuffer.indexCount = shapes[0].mesh.indices.size();
+    std::vector<Vertex> vertices{};
+    std::vector<uint32_t> indices{};
 
-    trisGeom[1].position = {0.5f, -0.5f, 1.0f};
-    trisGeom[1].color = {0.0f, 1.0f, 0.0f};
+    for (auto &idx : shapes[0].mesh.indices) {
+        Vertex v {
+        .position = glm::vec3(
+            attrib.vertices[idx.vertex_index * 3 + 0],
+            -attrib.vertices[idx.vertex_index * 3 + 1],
+            attrib.vertices[idx.vertex_index * 3 + 2]
+        )
+        };
+        vertices.push_back(v);
+        indices.push_back(indices.size());
+    }
 
-    trisGeom[2].position = {0.0f, 0.5f, 1.0f};
-    trisGeom[2].color = {1.0f, 0.0f, 0.0f};
 
-    uint32_t indices[] = {0, 1, 2};
-
-
-    constexpr auto vbuffSize = static_cast<VkDeviceSize>(sizeof(Vertex) * trisGeom.size());
-    constexpr auto ibuffSize = static_cast<VkDeviceSize>(sizeof(uint32_t) * 3);
-    appCtx.trisCtx.gpuBuffer.vertexBufferSize = vbuffSize;
-    appCtx.trisCtx.gpuBuffer.indexBufferSize = ibuffSize;
-    appCtx.trisCtx.gpuBuffer.size = vbuffSize + ibuffSize;
-    VkBufferCreateInfo buffCI {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = appCtx.trisCtx.gpuBuffer.size, .usage =  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |  VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
+    auto vbuffSize = static_cast<VkDeviceSize>(sizeof(Vertex) * vertices.size());
+    auto ibuffSize = static_cast<VkDeviceSize>(sizeof(uint32_t) * indices.size());
+    appCtx.modelCtx.gpuBuffer.vertexBufferSize = vbuffSize;
+    appCtx.modelCtx.gpuBuffer.indexBufferSize = ibuffSize;
+    appCtx.modelCtx.gpuBuffer.size = vbuffSize + ibuffSize;
+    VkBufferCreateInfo buffCI {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = appCtx.modelCtx.gpuBuffer.size, .usage =  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |  VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
     VmaAllocationCreateInfo buffAllocCI {.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT, .usage = VMA_MEMORY_USAGE_AUTO};
-    VK_CHECK(vmaCreateBuffer(appCtx.vkCtx.allocator, &buffCI, &buffAllocCI, &appCtx.trisCtx.gpuBuffer.buffer, &appCtx.trisCtx.gpuBuffer.bufferAllocation, nullptr), "Failed to create tris buffer");
+    VK_CHECK(vmaCreateBuffer(appCtx.vkCtx.allocator, &buffCI, &buffAllocCI, &appCtx.modelCtx.gpuBuffer.buffer, &appCtx.modelCtx.gpuBuffer.bufferAllocation, nullptr), "Failed to create tris buffer");
 
     void* pBuffMap = nullptr; // address of GPU memory
-    VK_CHECK(vmaMapMemory(appCtx.vkCtx.allocator, appCtx.trisCtx.gpuBuffer.bufferAllocation, &pBuffMap), "Failed to map buffer memory");
-    memcpy(pBuffMap, trisGeom.data(), vbuffSize); // copy vertices
-    memcpy(((char*)pBuffMap) + vbuffSize, indices, ibuffSize); // copy indices
-    vmaUnmapMemory(appCtx.vkCtx.allocator, appCtx.trisCtx.gpuBuffer.bufferAllocation);
+    VK_CHECK(vmaMapMemory(appCtx.vkCtx.allocator, appCtx.modelCtx.gpuBuffer.bufferAllocation, &pBuffMap), "Failed to map buffer memory");
+    memcpy(pBuffMap, vertices.data(), vbuffSize); // copy vertices
+    memcpy(((char*)pBuffMap) + vbuffSize, indices.data(), ibuffSize); // copy indices
+    vmaUnmapMemory(appCtx.vkCtx.allocator, appCtx.modelCtx.gpuBuffer.bufferAllocation);
 
     // create descriptor pool
     std::array<VkDescriptorPoolSize, 1> poolSizes{};
@@ -757,7 +769,7 @@ void initResouces(AppContext &appCtx) {
     };
 
     VK_CHECK(vkCreateDescriptorPool(appCtx.vkCtx.device, &descPoolCI, nullptr,
-                 &appCtx.trisCtx.descriptorPool),
+                 &appCtx.modelCtx.descriptorPool),
              "Failed to create descriptorPool");
     // create descriptor set layout
     /*
@@ -803,7 +815,7 @@ void initResouces(AppContext &appCtx) {
         .pushConstantRangeCount = 0u,
         .pPushConstantRanges = VK_NULL_HANDLE
     };
-    VK_CHECK(vkCreatePipelineLayout(appCtx.vkCtx.device, &pipLayoutCI, nullptr, &appCtx.trisCtx.piplineLayout),
+    VK_CHECK(vkCreatePipelineLayout(appCtx.vkCtx.device, &pipLayoutCI, nullptr, &appCtx.modelCtx.piplineLayout),
              "Failed to create pipeline layout");
 
     std::vector<VkDynamicState> dynamicStates = {
@@ -910,16 +922,16 @@ void initResouces(AppContext &appCtx) {
         .pDepthStencilState = &depthStencilStateCI,
         .pColorBlendState = &colorBlendStateCI,
         .pDynamicState = &dynamicStateCI,
-        .layout = appCtx.trisCtx.piplineLayout,
+        .layout = appCtx.modelCtx.piplineLayout,
         .renderPass = VK_NULL_HANDLE,
         .subpass = 0u,
         .basePipelineHandle = VK_NULL_HANDLE,
         .basePipelineIndex = 0u
     };
     VkPipelineCacheCreateInfo pipCacheCI = {VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
-    VK_CHECK(vkCreatePipelineCache(appCtx.vkCtx.device, &pipCacheCI, nullptr, &appCtx.trisCtx.pipelineCache),
+    VK_CHECK(vkCreatePipelineCache(appCtx.vkCtx.device, &pipCacheCI, nullptr, &appCtx.modelCtx.pipelineCache),
              "Failed to create pipeline cache object");
-    VK_CHECK(vkCreateGraphicsPipelines(appCtx.vkCtx.device, appCtx.trisCtx.pipelineCache, 1u, &pipelineInfo, nullptr, &appCtx.trisCtx.pipline), "Failed to create pipeline");
+    VK_CHECK(vkCreateGraphicsPipelines(appCtx.vkCtx.device, appCtx.modelCtx.pipelineCache, 1u, &pipelineInfo, nullptr, &appCtx.modelCtx.pipline), "Failed to create pipeline");
 }
 
 void renderScene(AppContext &appCtx) {
@@ -930,14 +942,14 @@ void renderScene(AppContext &appCtx) {
        //                       appCtx.trisCtx.piplineLayout, 0u, 1u,
        //                       &appCtx.trisCtx.descriptorSets[0], 0u, nullptr);
 
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, appCtx.trisCtx.pipline);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, appCtx.modelCtx.pipline);
 
         VkDeviceSize offsets[1]{ 0 };
-        vkCmdBindVertexBuffers(cmd, 0u, 1u, &appCtx.trisCtx.gpuBuffer.buffer, offsets);
-        vkCmdBindIndexBuffer(cmd, appCtx.trisCtx.gpuBuffer.buffer, appCtx.trisCtx.gpuBuffer.vertexBufferSize, VK_INDEX_TYPE_UINT32);
+        vkCmdBindVertexBuffers(cmd, 0u, 1u, &appCtx.modelCtx.gpuBuffer.buffer, offsets);
+        vkCmdBindIndexBuffer(cmd, appCtx.modelCtx.gpuBuffer.buffer, appCtx.modelCtx.gpuBuffer.vertexBufferSize, VK_INDEX_TYPE_UINT32);
 
 
-       vkCmdDrawIndexed(cmd, 3u, 1u, 0u, 0u, 0u);
+       vkCmdDrawIndexed(cmd, appCtx.modelCtx.gpuBuffer.indexCount, 1u, 0u, 0u, 0u);
 
 }
 

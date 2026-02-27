@@ -20,7 +20,7 @@ VSOutput main(VSInput input) {
 float4 main(VSOutput input) {
 
     float4 fragColor = float4(1.0f);
-    fragColor = float4(input.color, 1.0f);
+    fragColor = float4(float3(0.0f, 1.0f, 0.0f), 1.0f);
 
     return fragColor;
 }

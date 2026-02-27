@@ -21,10 +21,12 @@ add_subdirectory(deps/glm)
 set(VMA_BUILD_SAMPLES OFF)
 add_subdirectory(deps/VMA)
 
+add_subdirectory(deps/tinyobjloader)
+
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/output/lib")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/output/bin")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/output/lib")
 
 add_executable(${PROJECT_NAME} main.cpp)
-target_link_libraries(${PROJECT_NAME} PRIVATE glm glfw Vulkan::Vulkan GL slang slang-rhi VulkanMemoryAllocator)
+target_link_libraries(${PROJECT_NAME} PRIVATE glm glfw Vulkan::Vulkan GL slang slang-rhi VulkanMemoryAllocator tinyobjloader)
 set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 23)
