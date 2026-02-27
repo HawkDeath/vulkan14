@@ -73,6 +73,12 @@ struct Queue {
     VkQueue queueHandle = VK_NULL_HANDLE;
 };
 
+struct DepthBuffer {
+    VkImage image = {VK_NULL_HANDLE};
+    VkImageView imageView = {VK_NULL_HANDLE};
+    VmaAllocation depthAlloc = {VK_NULL_HANDLE};
+};
+
 struct SwapChain {
     VkSwapchainKHR swapchainHandle = VK_NULL_HANDLE;
     VkSwapchainKHR oldSwapchainHandle = VK_NULL_HANDLE;
@@ -80,6 +86,8 @@ struct SwapChain {
     VkColorSpaceKHR colorSpace{};
     VkExtent2D extent{};
     VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+
+    DepthBuffer depthBuffer{};
 
     std::vector<VkImage> images{};
     std::vector<VkImageView> imageViews{};
@@ -593,6 +601,46 @@ void initVulkan(AppContext &appCtx) {
                  "Failed to create image view - swapchain");
     }
 
+    // create depth buffer
+
+    std::vector<VkFormat> depthFormatList = {VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT};
+    VkFormat depthFormat {VK_FORMAT_UNDEFINED};
+    for (VkFormat &f : depthFormatList) {
+        VkFormatProperties2 formatProps2{.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
+        vkGetPhysicalDeviceFormatProperties2(appCtx.vkCtx.physicalDevice, f, &formatProps2);
+        if (formatProps2.formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+            depthFormat = f;
+            break;
+        }
+    }
+
+    VkImageCreateInfo depthImageCI {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext = VK_NULL_HANDLE,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = depthFormat,
+        .extent = {.width = appCtx.vkCtx.swapchain.extent.width, .height = appCtx.vkCtx.swapchain.extent.height, .depth = 1},
+        .mipLevels = 1u,
+        .arrayLayers =  1u,
+        .samples =  VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+    };
+
+    VmaAllocationCreateInfo allocDepth{.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT, .usage = VMA_MEMORY_USAGE_AUTO};
+    VK_CHECK(vmaCreateImage(appCtx.vkCtx.allocator, &depthImageCI, &allocDepth, &appCtx.vkCtx.swapchain.depthBuffer.image, &appCtx.vkCtx.swapchain.depthBuffer.depthAlloc, nullptr), "Failed to create depth buffer");
+
+    VkImageViewCreateInfo depthImageViewCI {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = appCtx.vkCtx.swapchain.depthBuffer.image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = depthFormat,
+        .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, .levelCount =  1u, .layerCount =  1u}
+
+    };
+    VK_CHECK(vkCreateImageView(appCtx.vkCtx.device, &depthImageViewCI, nullptr, &appCtx.vkCtx.swapchain.depthBuffer.imageView), "Failed to create depth image view");
+
+
     // create sync objects
     appCtx.vkCtx.waitFences.resize(appCtx.vkCtx.swapchain.MAX_SWAPCHAIN_FRAMES);
     appCtx.vkCtx.presentSemaphores.resize(
@@ -840,6 +888,12 @@ void initResouces(AppContext &appCtx) {
 
     VkPipelineMultisampleStateCreateInfo mulisampleCI = {VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     mulisampleCI.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineDepthStencilStateCreateInfo depthStencilStateCI {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_TRUE,
+        .depthWriteEnable = VK_TRUE,
+        .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL
+    };
 
     VkGraphicsPipelineCreateInfo pipelineInfo = {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -853,7 +907,7 @@ void initResouces(AppContext &appCtx) {
         .pViewportState = &viewportStateCI,
         .pRasterizationState = &rasterizationStateCI,
         .pMultisampleState = &mulisampleCI,
-        .pDepthStencilState = VK_NULL_HANDLE,
+        .pDepthStencilState = &depthStencilStateCI,
         .pColorBlendState = &colorBlendStateCI,
         .pDynamicState = &dynamicStateCI,
         .layout = appCtx.trisCtx.piplineLayout,
@@ -915,24 +969,40 @@ void draw(AppContext &appCtx) {
 
     vkBeginCommandBuffer(cmd, &cmdBegInfo);
     // image barrier
-    VkImageMemoryBarrier imgBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    imgBarrier.srcAccessMask = 0u;
-    imgBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    imgBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imgBarrier.newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
-    imgBarrier.image = appCtx.vkCtx.swapchain.images[imageIdx];
-    imgBarrier.subresourceRange =
-            VkImageSubresourceRange{VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u};
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0u, 0u,
-                         nullptr, 0u, nullptr, 1u, &imgBarrier);
+    std::array<VkImageMemoryBarrier2, 2> imgBarriers {
+        VkImageMemoryBarrier2{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .pNext = VK_NULL_HANDLE,
+            .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .srcAccessMask = 0u,
+            .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+            .image = appCtx.vkCtx.swapchain.images[imageIdx],
+            .subresourceRange = VkImageSubresourceRange{VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u}}, // color attachment
+        VkImageMemoryBarrier2{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .pNext = VK_NULL_HANDLE,
+            .srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            .srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+            .image = appCtx.vkCtx.swapchain.depthBuffer.image,
+            .subresourceRange = VkImageSubresourceRange{VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, 0u, 1u, 0u, 1u}} // depth attachment
+        };
+
+        VkDependencyInfo barrierDepsInfo {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = imgBarriers.size(), .pImageMemoryBarriers = imgBarriers.data()};
+        vkCmdPipelineBarrier2(cmd, &barrierDepsInfo);
 
     // rendering here
     VkRenderingAttachmentInfo colorAttachInfo = {
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
         .pNext = VK_NULL_HANDLE,
         .imageView = appCtx.vkCtx.swapchain.imageViews[imageIdx],
-        .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
         .resolveMode = VK_RESOLVE_MODE_NONE,
         .resolveImageView = VK_NULL_HANDLE,
         .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
@@ -942,21 +1012,34 @@ void draw(AppContext &appCtx) {
 
     };
 
-    // TODO: add depth buffer
+    VkRenderingAttachmentInfo depthAttachInfo = {
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .pNext = VK_NULL_HANDLE,
+        .imageView = appCtx.vkCtx.swapchain.depthBuffer.imageView,
+        .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+        .resolveMode = VK_RESOLVE_MODE_NONE,
+        .resolveImageView = VK_NULL_HANDLE,
+        .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .clearValue = {.depthStencil = {1.0f, 0}}
+
+    };
 
     VkRenderingInfo renderingInfo = {
         .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
         .pNext = VK_NULL_HANDLE,
         .flags = 0u,
         .renderArea = {
-            0, 0, appCtx.vkCtx.swapchain.extent.width,
+            0, 0,
+            appCtx.vkCtx.swapchain.extent.width,
             appCtx.vkCtx.swapchain.extent.height
         },
         .layerCount = 1u,
         .viewMask = 0u,
         .colorAttachmentCount = 1u,
         .pColorAttachments = &colorAttachInfo,
-        .pDepthAttachment = VK_NULL_HANDLE,
+        .pDepthAttachment = &depthAttachInfo,
         .pStencilAttachment = VK_NULL_HANDLE
 
     };
@@ -976,22 +1059,25 @@ void draw(AppContext &appCtx) {
         appCtx.vkCtx.swapchain.extent.height
     };
     vkCmdSetScissor(cmd, 0u, 1u, &scissor);
-
     renderScene(appCtx);
-
     vkCmdEndRendering(cmd);
 
-    imgBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    imgBarrier.dstAccessMask = 0u;
-    imgBarrier.oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
-    imgBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_PIPELINE_STAGE_2_NONE, 0u, 0u, nullptr, 0u, nullptr,
-                         1u, &imgBarrier);
+    VkImageMemoryBarrier2 barrierPresent {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .pNext = VK_NULL_HANDLE,
+        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .dstAccessMask = 0u,
+        .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        .image = appCtx.vkCtx.swapchain.images[imageIdx],
+        .subresourceRange = VkImageSubresourceRange{VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u}
+    };
+    VkDependencyInfo presentDepsInfo {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount =  1u, .pImageMemoryBarriers = &barrierPresent};
+    vkCmdPipelineBarrier2(cmd, &presentDepsInfo);
 
     vkEndCommandBuffer(cmd);
-
     VkPipelineStageFlags waitStageMask =
             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 

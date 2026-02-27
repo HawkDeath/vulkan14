@@ -3,7 +3,6 @@ struct VSInput {
     float3 color;
 };
 
-
 struct VSOutput {
     float4 pos : SV_POSITION;
     float3 color;
